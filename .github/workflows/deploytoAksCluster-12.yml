@@ -1,0 +1,63 @@
+on: [push]
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@master
+    
+    - uses: azure/docker-login@v1
+      with:
+        login-server: abhisheaacr.azurecr.io
+        username: ${{ secrets.acr_abhisheaacr_username }}
+        password: ${{ secrets.acr_abhisheaacr_password }}
+    
+    - name: Build and push image to ACR
+      id: build-image
+      run: |
+        docker build "$GITHUB_WORKSPACE/" -f  "Dockerfile" -t abhisheaacr.azurecr.io/vipulakscluster:${{ github.sha }}
+        docker push abhisheaacr.azurecr.io/vipulakscluster:${{ github.sha }}
+    
+    - uses: azure/k8s-set-context@v1
+      with:
+         kubeconfig: ${{ secrets.aks_vipulakscluster_kubeConfig }}
+      id: login
+    
+    - name: Create namespace
+      run: |
+        namespacePresent=`kubectl get namespace | grep vipulaksclustera203 | wc -l`
+        if [ $namespacePresent -eq 0 ]
+        then
+            echo `kubectl create namespace vipulaksclustera203`
+        fi
+
+    - uses: azure/k8s-create-secret@v1
+      with:
+        namespace: vipulaksclustera203
+        container-registry-url: abhisheaacr.azurecr.io
+        container-registry-username: ${{ secrets.acr_abhisheaacr_username }}
+        container-registry-password: ${{ secrets.acr_abhisheaacr_password }}
+        secret-name: vipulaksclusdockerauth
+       
+    - uses: azure/k8s-bake@v1
+      with:
+        renderEngine: 'helm'
+        helmChart: chart/ 
+        overrideFiles: |
+          
+        overrides: |
+          replicas:2
+          image.repository:vipulakscluster
+          image.tag:${{ github.sha }}
+          imagePullSecrets:vipulaksclusdockerauth
+        helm-version: 'latest' 
+        silent: 'false'
+      id: bake
+
+    - uses: azure/k8s-deploy@v1
+      with:
+        namespace: vipulaksclustera203
+        manifests: ${{ steps.bake.outputs.manifestsBundle }}
+        images: |
+          abhisheaacr.azurecr.io/vipulakscluster:${{ github.sha }}
+        imagepullsecrets: |
+          vipulaksclusdockerauth
