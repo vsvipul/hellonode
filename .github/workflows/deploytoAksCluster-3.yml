@@ -1,0 +1,65 @@
+on: [push]
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@master
+    
+    - uses: azure/docker-login@v1
+      with:
+        login-server: acr2ac5ef2vrjdac.azurecr.io
+        username: ${{ secrets.acr_acr2ac5ef2vrjdac_username }}
+        password: ${{ secrets.acr_acr2ac5ef2vrjdac_password }}
+    
+    - name: Build and push image to ACR
+      id: build-image
+      run: |
+        docker build "$GITHUB_WORKSPACE/" -f  "Dockerfile" -t acr2ac5ef2vrjdac.azurecr.io/vipulakscluster:${{ github.sha }}
+        docker push acr2ac5ef2vrjdac.azurecr.io/vipulakscluster:${{ github.sha }}
+    
+    - uses: azure/k8s-set-context@v1
+      with:
+         kubeconfig: ${{ secrets.aks_vipulakscluster_kubeConfig }}
+      id: login
+    
+    - name: Create namespace
+      run: |
+        namespacePresent=`kubectl get namespace | grep vipulakscluster702a | wc -l`
+        if [ $namespacePresent -eq 0 ]
+        then
+            echo `kubectl create namespace vipulakscluster702a`
+        fi
+
+    - uses: azure/k8s-create-secret@v1
+      with:
+        namespace: vipulakscluster702a
+        container-registry-url: acr2ac5ef2vrjdac.azurecr.io
+        container-registry-username: ${{ secrets.acr_acr2ac5ef2vrjdac_username }}
+        container-registry-password: ${{ secrets.acr_acr2ac5ef2vrjdac_password }}
+        secret-name: vipulaksclusdockerauth
+       
+    - uses: azure/k8s-bake@v1
+      with:
+        renderEngine: 'helm'
+        helmChart: chart
+        releaseName: 'aks-helm-release'
+        helm-version: 'latest' 
+        silent: 'false'
+        overrideFiles: |
+          
+        overrides: |
+          replicas:2
+          image.repository:acr2ac5ef2vrjdac.azurecr.io/vipulakscluster
+          image.tag:${{ github.sha }}
+          imagePullSecrets:
+            -name:vipulaksclusdockerauth
+      id: bake
+
+    - uses: azure/k8s-deploy@v1
+      with:
+        namespace: vipulakscluster702a
+        manifests: ${{ steps.bake.outputs.manifestsBundle }}
+        images: |
+          acr2ac5ef2vrjdac.azurecr.io/vipulakscluster:${{ github.sha }}
+        imagepullsecrets: |
+          vipulaksclusdockerauth
